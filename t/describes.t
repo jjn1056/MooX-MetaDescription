@@ -14,7 +14,14 @@ use Test::More;
   with 'MooX::MetaDescription::Descriptor::Each';
   extends 'Local::Meta::Boilerplate';
 
+  sub describe_each {
+    my ($self, $attribute, %opts) = @_;
+    warn $self;
+  }
+
   package Local::User;
+
+  use Moo;
   use MooX::MetaDescription;
 
   has name => (is=>'ro');
@@ -28,7 +35,7 @@ use Test::More;
     Notes => { notes => 'User email' },
   );
 
-  description Meta => { notes => 'Information about a user' }
+  description Meta => { notes => 'Information about a user' };
 
   described_by '+Local::Meta::Boilerplate' => { notes => 'For Local Application' };
 }

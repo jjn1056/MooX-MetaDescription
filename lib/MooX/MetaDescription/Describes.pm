@@ -7,6 +7,8 @@ use Scalar::Util;
 requires 'ancestors';
 
 sub DEBUG_MX_MD { $ENV{MOOX_META_DESCRIPTION_DEBUG} ? 1:0 }
+sub DEBUG { warn "$_[0]\n" if DEBUG_MX_MD }
+sub MXMD_CALLBACK { 'MooX::MetaDescription::Descriptor::Callback' }
 
 my @_descriptions;
 sub _descriptions {
@@ -54,7 +56,7 @@ sub _find_descriptor_package_in {
       # This regexp matches too much... We need to add the package
       # path here just the path delim will vary from platform to platform
       if($@=~m/^Can't locate/) {
-        warn "Can't find $_ in \@INC\n" if DEBUG_MX_MD;
+        DEBUG "Can't find $_ in \@INC";
         0;
       } else {
         die $@;
@@ -64,19 +66,20 @@ sub _find_descriptor_package_in {
     join '::', ($_, $key)
   } @inc;
   die "'$key' is not a Descriptor" unless $descriptor_package;
-  warn "Found $descriptor_package in \@INC\n" if DEBUG_MX_MD;
+  DEBUG "Found '$descriptor_package' in \@INC";
   return $descriptor_package;
 }
 
 sub _create_descriptor {
-  my ($self, $descriptor_package, $args) = @_;
-  my $descriptor = Module::Runtime::use_module($descriptor_package)->new($args);
+  my ($self, $descriptor_package, %args) = @_;
+  DEBUG "Creating Descriptor '$descriptor_package'";
+  my $descriptor = Module::Runtime::use_module($descriptor_package)->new(%args);
   return $descriptor;
 }
 
 sub _normalize_package_part {
-  my ($class, $package_part) = @_;
-  my ($fully_qualified_flag, $package_part) = ($package_part =~/^(+?)(.+)$/);
+  my ($class, $package_proto) = @_;
+  my ($fully_qualified_flag, $package_part) = ($package_proto =~/^(\+?)(.+)$/);
   return $package_part if $fully_qualified_flag;
 
   my @inc = $class->_generate_application_descriptor_inc;
@@ -95,6 +98,7 @@ sub default_descriptor_inc {
 sub _generate_application_descriptor_inc {
   my ($class) = @_;
   my @parts = split '::', $class;
+  my @project_inc = ();
   while(@parts) {
     push @project_inc, join '::', (@parts, $class->default_descriptor_namepart);
     pop @parts;
@@ -113,8 +117,12 @@ sub _normalize_attributes {
 sub describe {
   my ($class, $attribute_proto, @description_proto) = @_;
   my @attributes = $class->_normalize_attributes($attribute_proto);
-  my (%global, @descriptors);
+  my %global_args = (
+    attributes => \@attributes,
+    model_class => $class,
+  );
 
+  my @descriptors = ();
   while(@description_proto) {
     my $key = shift(@description_proto);
 
@@ -124,27 +132,27 @@ sub describe {
       my @args = map {
         (ref($_)||'') eq 'ARRAY' ? @$_ : ($_)
       } shift(@description_proto);
-      push @{$global{$key}}, @args;
+      push @{$global_args{$key}}, @args;
       next; # short circuit any more processing
     }
 
     # Default arguments
-    my $args = +{
-      attributes => $attributes,
+    my %args = (
+      attributes => \@attributes,
       model_class => $class,
-    };
+    );
 
     # Handle the instance case (ie, "describe MyDescriptor->new")
     if(Scalar::Util::blessed($key)) {
       die "Descriptor '@{[ ref $key ]}' must provide 'get_descriptions' method"
         unless $_->can('get_descriptions');
-      $args->{callback} = sub { $key };
-      $key = 'MooX::MetaDescription::Descriptor::Callback';
+      $args{callback} = sub { $key };
+      $key = MXMD_CALLBACK;
       
       # this bit allows for "describe MyDescriptor->new(%args), +{ on => 'context'}"
       if((ref($description_proto[0])||'') eq 'HASH') {
         my $instance_args = shift(@description_proto);
-        $args = +{ %$args, %$instance_args };
+        %args = (%args, %$instance_args );
       }
     }
     # Ok now we handle the package or package part case (ie "Notes => { ... }")
@@ -154,16 +162,16 @@ sub describe {
       unless((ref($descriptor_args)||'') eq 'HASH') {
         $descriptor_args = $key->normalize_shortcut($descriptor_args);
       }
-      $args = +{ %$args, %$descriptor_args };
+      %args = (%args, %$descriptor_args );
     }
 
-    my $descriptor = $class->_create_descriptor($key, $args);
+    my $descriptor = $class->_create_descriptor($key, %args);
     push @descriptors, $descriptor;
   }
 
-  $global{callback} = sub { $_->get_descriptions(@_) for @descriptors };
+  $global_args{callback} = sub { $_->get_descriptions(@_) for @descriptors };
   
-  my $callback = $class->_create_descriptor('MooX::MetaDescription::Descriptor::Callback', \%global);
+  my $callback = $class->_create_descriptor(MXMD_CALLBACK, %global_args);
   return $class->_descriptions($callback);
 }
 

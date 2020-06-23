@@ -2,10 +2,12 @@ package MooX::MetaDescription::Descriptor;
 
 use Moo::Role;
 
-sub get_description {
+sub get_descriptions {
   my ($self, $object, @args) = @_;
   return $self;
 }
+
+1;
 
 =head1 TITLE
 
