@@ -1,10 +1,12 @@
 package MooX::MetaDescription::Describes;
 
 use Moo::Role;
-use Module::Runtime 'use_module';
+use Module::Runtime;
 use Scalar::Util;
 
 requires 'ancestors';
+
+sub DEBUG_MX_MD { $ENV{MOOX_META_DESCRIPTION_DEBUG} ? 1:0 }
 
 my @_descriptions;
 sub _descriptions {
@@ -29,23 +31,96 @@ sub get_descriptions {
   my ($self, %opts) = @_;
 }
 
+sub read_attribute_for_description {
+  my ($self, $attribute) = @_;
+  return unless defined $attribute;
+  return my $value = $self->$attribute if $self->can($attribute);
+  die "Class '@{[ ref $self ]}' does not have an attribute '$attribute'";
+}
+
+sub _reserved_option_keys { return qw/if unless on/ }
+
 sub _is_reserved_option_key {
-  return ($_[0] eq 'if' || $_[0] eq 'unless' || $_[0] eq 'on') ? 1:0;
+  my ($class, $key_to_check) = @_;
+  return grep {
+    $_ eq $key_to_check
+  } $class->_reserved_option_keys;
+}
+
+sub _find_descriptor_package_in {
+  my ($self, $key, @inc) = @_;
+  my ($descriptor_package, @rest) = grep {
+    eval { Module::Runtime::use_module $_ } || do {
+      # This regexp matches too much... We need to add the package
+      # path here just the path delim will vary from platform to platform
+      if($@=~m/^Can't locate/) {
+        warn "Can't find $_ in \@INC\n" if DEBUG_MX_MD;
+        0;
+      } else {
+        die $@;
+      }
+    }
+  } map {
+    join '::', ($_, $key)
+  } @inc;
+  die "'$key' is not a Descriptor" unless $descriptor_package;
+  warn "Found $descriptor_package in \@INC\n" if DEBUG_MX_MD;
+  return $descriptor_package;
+}
+
+sub _create_descriptor {
+  my ($self, $descriptor_package, $args) = @_;
+  my $descriptor = Module::Runtime::use_module($descriptor_package)->new($args);
+  return $descriptor;
+}
+
+sub _normalize_package_part {
+  my ($class, $package_part) = @_;
+  my ($fully_qualified_flag, $package_part) = ($package_part =~/^(+?)(.+)$/);
+  return $package_part if $fully_qualified_flag;
+
+  my @inc = $class->_generate_application_descriptor_inc;
+  return my $package = $class->_find_descriptor_package_in($package_part, @inc);
+}
+
+sub default_descriptor_namepart { 'Descriptor' }
+
+sub default_descriptor_inc {
+  return (
+    join('::','MooX::MetaDescriptionX', $_[0]->default_descriptor_namepart),
+    join('::','MooX::MetaDescription', $_[0]->default_descriptor_namepart),
+  );
+}
+
+sub _generate_application_descriptor_inc {
+  my ($class) = @_;
+  my @parts = split '::', $class;
+  while(@parts) {
+    push @project_inc, join '::', (@parts, $class->default_descriptor_namepart);
+    pop @parts;
+  }
+  push @project_inc, $class->default_descriptor_inc;
+  return @project_inc;
+}
+
+sub _normalize_attributes {
+  my ($class, $attribute_proto) = @_;
+  my @attributes = (ref($attribute_proto)||'') eq 'ARRAY' ?
+    @$attribute_proto : ($attribute_proto);
+  return @attributes;
 }
 
 sub describe {
   my ($class, $attribute_proto, @description_proto) = @_;
-  my @attributes = (ref($attribute_proto)||'' eq 'ARRAY') ?
-    @$attribute_proto :
-      ($attribute_proto);
+  my @attributes = $class->_normalize_attributes($attribute_proto);
+  my (%global, @descriptors);
 
-  my (%global, @descriptions);
   while(@description_proto) {
     my $key = shift(@description_proto);
 
     # pull out any global options
-    if(_is_reserved_option_key($key)) {
-      # Options are allowd to be a scalar or an arrayref
+    if($class->_is_reserved_option_key($key)) {
+      # Options are allowed to be a scalar or an arrayref
       my @args = map {
         (ref($_)||'') eq 'ARRAY' ? @$_ : ($_)
       } shift(@description_proto);
@@ -53,32 +128,43 @@ sub describe {
       next; # short circuit any more processing
     }
 
+    # Default arguments
+    my $args = +{
+      attributes => $attributes,
+      model_class => $class,
+    };
+
     # Handle the instance case (ie, "describe MyDescriptor->new")
-    my $args = +{};
     if(Scalar::Util::blessed($key)) {
-      die "Descriptor Instances must provide 'get_descriptions' method"
+      die "Descriptor '@{[ ref $key ]}' must provide 'get_descriptions' method"
         unless $_->can('get_descriptions');
-      $args = { instance => $key };
-      $key = 'instance';
+      $args->{callback} = sub { $key };
+      $key = 'MooX::MetaDescription::Descriptor::Callback';
       
       # this bit allows for "describe MyDescriptor->new(%args), +{ on => 'context'}"
       if((ref($description_proto[0])||'') eq 'HASH') {
-        my $base_args = shift(@description_proto);
-        $args = +{ %$args, %$base_args };
+        my $instance_args = shift(@description_proto);
+        $args = +{ %$args, %$instance_args };
       }
     }
-    # Ok now we handle the package or package part case
+    # Ok now we handle the package or package part case (ie "Notes => { ... }")
     else {
-
+      $key = $class->_normalize_package_part($key);
+      my $descriptor_args = shift(@description_proto);
+      unless((ref($descriptor_args)||'') eq 'HASH') {
+        $descriptor_args = $key->normalize_shortcut($descriptor_args);
+      }
+      $args = +{ %$args, %$descriptor_args };
     }
 
-    # remove the global args and if any we need to wrap in ::Util::ProcessProxy
-
-    push @descriptions, [$key, $args];
+    my $descriptor = $class->_create_descriptor($key, $args);
+    push @descriptors, $descriptor;
   }
 
+  $global{callback} = sub { $_->get_descriptions(@_) for @descriptors };
   
-
+  my $callback = $class->_create_descriptor('MooX::MetaDescription::Descriptor::Callback', \%global);
+  return $class->_descriptions($callback);
 }
 
 sub description {
