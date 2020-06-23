@@ -31,6 +31,9 @@ sub _descriptions {
 
 sub get_descriptions {
   my ($self, %opts) = @_;
+  return my @descriptors = map {
+    my @list = $_->get_descriptions($self, %opts);
+  } $self->_descriptions;
 }
 
 sub read_attribute_for_description {
@@ -169,7 +172,12 @@ sub describe {
     push @descriptors, $descriptor;
   }
 
-  $global_args{callback} = sub { $_->get_descriptions(@_) for @descriptors };
+  $global_args{callback} = sub {
+    my @args = @_;
+    return my @found = map {
+      $_->get_descriptions(@args);
+    } @descriptors;
+  };
   
   my $callback = $class->_create_descriptor(MXMD_CALLBACK, %global_args);
   return $class->_descriptions($callback);

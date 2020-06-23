@@ -9,7 +9,7 @@ has if => (is=>'ro', predicate=>'has_if');
 has unless => (is=>'ro', predicate=>'has_unless');
 has on => (is=>'ro', predicate=>'has_on');
 has opts => (is=>'ro', required=>1, default=>sub { +{} });
-has attributes => (is=>'ro', required=>1);
+has attributes => (is=>'ro', predicate=>'has_attributes');
 has model_class => (is=>'ro', required=>1);
 
 # TODO maybe have a 'where' attribute which allows a callback so you can
@@ -28,19 +28,20 @@ sub options {
 }
 
 sub generate_attributes {
-  my ($self, $object, $options) = @_;
+  my ($self, $object, %options) = @_;
   if(ref($self->attributes) eq 'ARRAY') {
     return @{ $self->attributes };
   } elsif(ref($self->attributes) eq 'CODE') {
-    return $self->attributes->($object, $options);
+    return $self->attributes->($object, %options);
   }
 }
 
-sub get_descriptions {
-  my ($self, $object, $options) = @_;
+sub get_descriptions {  
+  my ($self, $object, %options) = @_;
 
   # Loop over each attribute and run the validators
-  ATTRIBUTE_LOOP: foreach my $attribute ($self->generate_attributes(@_)) {
+  my @descriptors = ();
+  ATTRIBUTE_LOOP: foreach my $attribute ($self->generate_attributes($object, %options)) {
     if($self->has_if) {
       my @if = (ref($self->if)||'') eq 'ARRAY' ? @{$self->if} : ($self->if);
       foreach my $if (@if) {
@@ -72,7 +73,7 @@ sub get_descriptions {
 
     if($self->has_on) {
       my @on = ref($self->on) ? @{$self->on} : ($self->on);
-      my $context = $options->{context}||'';
+      my $context = $options{context}||'';
       my @context = ref($context) ? @$context : ($context);
       my $matches = 0;
 
@@ -88,8 +89,11 @@ sub get_descriptions {
       next unless $matches;
     }
 
-    $self->describe_each($object, $attribute, $self->options(%{$options||+{}}));
+    my @each = $self->describe_each($object, $attribute, $self->options(%options));
+    push @descriptors, @each;
   }
+
+  return @descriptors;
 }
 
 sub _cb_value {
